@@ -1,0 +1,7 @@
+google-adk
+exa-py
+tavily-python
+firecrawl-py
+python-dotenv
+fastapi
+uvicorn 
