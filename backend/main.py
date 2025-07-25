@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
 from .pipeline import run_ai_analysis
 
 app = FastAPI()
@@ -17,6 +18,8 @@ def root():
     return {"message": "AI Trend Analyzer Backend is running."}
 
 @app.post("/analyze")
-def analyze():
-    result = run_ai_analysis()
+async def analyze(request: Request):
+    data = await request.json()
+    topic = data.get('topic', 'AI & Machine Learning')
+    result = await run_ai_analysis(topic)
     return {"result": result} 
