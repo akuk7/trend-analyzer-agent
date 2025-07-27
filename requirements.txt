@@ -1,4 +1,6 @@
 google-adk
+litellm
+google-genai
 exa-py
 tavily-python
 firecrawl-py
