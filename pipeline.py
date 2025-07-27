@@ -14,6 +14,16 @@ from firecrawl import FirecrawlApp
 from dotenv import load_dotenv
 import os
 import asyncio
+import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Reduce LiteLLM logging verbosity
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -166,6 +176,7 @@ def log_final_response(response):
     print(response)
 
 def exa_search_ai(topic_name: str) -> dict:
+    logger.info(f"[Tool] exa_search_ai called with topic: {topic_name}")
     topic = get_topic_config(topic_name)
     try:
         results = Exa(api_key=os.getenv("EXA_API_KEY")).search_and_contents(
@@ -177,11 +188,13 @@ def exa_search_ai(topic_name: str) -> dict:
             highlights={"highlights_per_url": 2, "num_sentences": 3},
             start_published_date=(datetime.now() - timedelta(days=30)).isoformat()
         )
+        
         return {
             "type": "exa",
             "results": [r.__dict__ for r in results.results]
         }
     except Exception as e:
+        logger.error(f"[Tool] exa_search_ai failed for {topic_name}: {str(e)}")
         return {
             "type": "exa",
             "error": f"Exa search failed: {str(e)}",
@@ -189,6 +202,7 @@ def exa_search_ai(topic_name: str) -> dict:
         }
 
 def tavily_search_ai_analysis(topic_name: str) -> dict:
+    logger.info(f"[Tool] tavily_search_ai_analysis called with topic: {topic_name}")
     topic = get_topic_config(topic_name)
     try:
         client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
@@ -198,11 +212,13 @@ def tavily_search_ai_analysis(topic_name: str) -> dict:
             time_range="week",
             include_domains=topic["tavily_domains"]
         )
+       
         return {
             "type": "tavily",
             "results": response.get("results", [])
         }
     except Exception as e:
+        logger.error(f"[Tool] tavily_search_ai_analysis failed for {topic_name}: {str(e)}")
         return {
             "type": "tavily",
             "error": f"Tavily search failed: {str(e)}",
@@ -210,6 +226,7 @@ def tavily_search_ai_analysis(topic_name: str) -> dict:
         }
 
 def firecrawl_scrape_topic(topic_name: str) -> dict:
+    logger.info(f"[Tool] firecrawl_scrape_topic called with topic: {topic_name}")
     topic = get_topic_config(topic_name)
     firecrawl = FirecrawlApp(api_key=os.getenv("FIRECRAWL_API_KEY"))
     try:
@@ -219,54 +236,88 @@ def firecrawl_scrape_topic(topic_name: str) -> dict:
             only_main_content=True
         )
         if scrape_result.success:
+          
             return {
                 "type": "firecrawl",
                 "markdown": scrape_result.markdown
             }
         else:
+            logger.error(f"[Tool] firecrawl_scrape_topic failed for {topic_name}: Scraping failed")
             return {
                 "type": "firecrawl",
                 "error": "Scraping failed."
             }
     except Exception as e:
+        logger.error(f"[Tool] firecrawl_scrape_topic failed for {topic_name}: {str(e)}")
         return {
             "type": "firecrawl",
             "error": str(e)
         }
 
 async def run_ai_analysis(topic_name="AI & Machine Learning") -> str:
-    topic = get_topic_config(topic_name)
-    await ensure_session()
+    start_time = time.time()
+    logger.info(f"[Pipeline] Starting analysis for topic: {topic_name}")
+    
+    try:
+        topic = get_topic_config(topic_name)
+        await ensure_session()
 
-    exa_agent = LlmAgent(
-        name="ExaAgent",
-        model=nebius_model,
-        description="Fetches latest news...",
-        instruction=topic["exa_instruction"],
-        tools=[exa_search_ai],
-        output_key="exa_results"
-    )
-    tavily_agent = LlmAgent(
-        name="TavilyAgent",
-        model=nebius_model,
-        description="Fetches stats...",
-        instruction=topic["tavily_instruction"],
-        tools=[tavily_search_ai_analysis],
-        output_key="tavily_results"
-    )
-    firecrawl_agent = LlmAgent(
-        name="FirecrawlAgent",
-        model=nebius_model,
-        description="Scrapes...",
-        instruction=topic["firecrawl_instruction"],
-        tools=[firecrawl_scrape_topic],
-        output_key="firecrawl_content"
-    )
-    summary_agent = LlmAgent(
-        name="SummaryAgent",
-        model=nebius_model,
-        description="Summarizes and formats Exa and Tavily results.",
-        instruction="""
+        # Create agents with timing and error handling
+        exa_start = time.time()
+        try:
+            exa_agent = LlmAgent(
+                name="ExaAgent",
+                model=nebius_model,
+                description="Fetches latest news...",
+                instruction=topic["exa_instruction"],
+                tools=[exa_search_ai],
+                output_key="exa_results"
+            )
+            exa_time = time.time() - exa_start
+            logger.info(f"[Pipeline] ExaAgent created in {exa_time:.2f}s")
+        except Exception as e:
+            logger.error(f"[Pipeline] Error creating ExaAgent: {str(e)}")
+            raise
+
+        tavily_start = time.time()
+        try:
+            tavily_agent = LlmAgent(
+                name="TavilyAgent",
+                model=nebius_model,
+                description="Fetches stats...",
+                instruction=topic["tavily_instruction"],
+                tools=[tavily_search_ai_analysis],
+                output_key="tavily_results"
+            )
+            tavily_time = time.time() - tavily_start
+            logger.info(f"[Pipeline] TavilyAgent created in {tavily_time:.2f}s")
+        except Exception as e:
+            logger.error(f"[Pipeline] Error creating TavilyAgent: {str(e)}")
+            raise
+
+        firecrawl_start = time.time()
+        try:
+            firecrawl_agent = LlmAgent(
+                name="FirecrawlAgent",
+                model=nebius_model,
+                description="Scrapes...",
+                instruction=topic["firecrawl_instruction"],
+                tools=[firecrawl_scrape_topic],
+                output_key="firecrawl_content"
+            )
+            firecrawl_time = time.time() - firecrawl_start
+            logger.info(f"[Pipeline] FirecrawlAgent created in {firecrawl_time:.2f}s")
+        except Exception as e:
+            logger.error(f"[Pipeline] Error creating FirecrawlAgent: {str(e)}")
+            raise
+
+        summary_start = time.time()
+        try:
+            summary_agent = LlmAgent(
+                name="SummaryAgent",
+                model=nebius_model,
+                description="Summarizes and formats Exa and Tavily results.",
+                instruction="""
 You are a summarizer and formatter.
 - Combine the information from 'exa_results' (latest updates) and 'tavily_results' (benchmarks and analysis).
 - Present a structured summary, highlighting key trends, new developments, and relevant statistics.
@@ -276,18 +327,26 @@ You are a summarizer and formatter.
 - Prefix your response with \"**🍥SummaryAgent:**\" to clearly identify your output.
 - **Only use the tools provided to you. Do not call any other functions or tools.**
 """,
-        tools=[],
-        output_key="final_summary"
-    )
-    analysis_agent = LlmAgent(
-        name="AnalysisAgent",
-        model=LiteLlm(
-            model="openai/nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
-            api_base=api_base,
-            api_key=api_key
-        ),
-        instruction="""
-You are an AI analyst specializing in the latest trends and statistics.
+                tools=[],
+                output_key="final_summary"
+            )
+            summary_time = time.time() - summary_start
+            logger.info(f"[Pipeline] SummaryAgent created in {summary_time:.2f}s")
+        except Exception as e:
+            logger.error(f"[Pipeline] Error creating SummaryAgent: {str(e)}")
+            raise
+
+        analysis_start = time.time()
+        try:
+            analysis_agent = LlmAgent(
+                name="AnalysisAgent",
+                model=LiteLlm(
+                    model="openai/nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+                    api_base=api_base,
+                    api_key=api_key
+                ),
+                instruction="""
+You are an analyst specializing in the latest trends and statistics.
 - ONLY output the final analysis. Do NOT include any 'think', 'chain-of-thought', scratchpad text, or any agent prefix (such as 'AnalysisAgent:') in your response.
 - Do NOT include any commentary, meta statements, or process explanations. Only output the analysis itself.
 - Do NOT invent or hallucinate names, features, or recommendations. Only use information explicitly provided in 'final_summary', 'exa_results', 'tavily_results', and 'firecrawl_content'.
@@ -295,29 +354,83 @@ You are an AI analyst specializing in the latest trends and statistics.
 - Present your analysis with clear and concise language, supported by quantifiable data and insights.
 - Use markdown tables for statistics, but do not include any agent labels or process explanations.
 """,
-        description="Analyzes the summary and presents insights and statistics.",
-        output_key="analysis_results"
-    )
+                description="Analyzes the summary and presents insights and statistics.",
+                output_key="analysis_results"
+            )
+            analysis_time = time.time() - analysis_start
+            logger.info(f"[Pipeline] AnalysisAgent created in {analysis_time:.2f}s")
+        except Exception as e:
+            logger.error(f"[Pipeline] Error creating AnalysisAgent: {str(e)}")
+            raise
 
-    parallel_research_agent = ParallelAgent(
-        name="ParallelWebResearchAgent",
-        sub_agents=[exa_agent, tavily_agent, firecrawl_agent],
-        description="Runs multiple research agents in parallel to gather information."
-    )
-    pipeline = SequentialAgent(
-        name="AIPipelineAgent",
-        sub_agents=[parallel_research_agent, summary_agent, analysis_agent]
-    )
-    runner = Runner(agent=pipeline, app_name=APP_NAME, session_service=session_service)
-    content = types.Content(role="user", parts=[types.Part(text=topic_name)])
-    events = runner.run(user_id=USER_ID, session_id=SESSION_ID, new_message=content)
-    last_response = None
-    for event in events:
-        log_event(event)
-        if event.is_final_response():
-            last_response = event.content.parts[0].text
-    if last_response:
-        log_final_response(last_response)
-        return last_response
-    print("[Pipeline] No final response from pipeline.")
-    return "No final response from pipeline." 
+        # Create pipeline with timing
+        pipeline_start = time.time()
+        try:
+            parallel_research_agent = ParallelAgent(
+                name="ParallelWebResearchAgent",
+                sub_agents=[exa_agent, tavily_agent, firecrawl_agent],
+                description="Runs multiple research agents in parallel to gather information."
+            )
+            pipeline = SequentialAgent(
+                name="AIPipelineAgent",
+                sub_agents=[parallel_research_agent, summary_agent, analysis_agent]
+            )
+            runner = Runner(agent=pipeline, app_name=APP_NAME, session_service=session_service)
+            pipeline_time = time.time() - pipeline_start
+            logger.info(f"[Pipeline] Pipeline created in {pipeline_time:.2f}s")
+        except Exception as e:
+            logger.error(f"[Pipeline] Error creating pipeline: {str(e)}")
+            raise
+
+        # Run pipeline with timing
+        execution_start = time.time()
+        try:
+            content = types.Content(role="user", parts=[types.Part(text=topic_name)])
+            events = runner.run(user_id=USER_ID, session_id=SESSION_ID, new_message=content)
+            
+            last_response = None
+            agent_start_times = {}
+            agent_completion_times = {}
+            
+            for event in events:
+                try:
+                    # Track agent start times
+                    if hasattr(event, 'author') and event.author:
+                        if event.author not in agent_start_times:
+                            agent_start_times[event.author] = time.time()
+                    
+                    if event.is_final_response():
+                        last_response = event.content.parts[0].text
+                        # Record final completion time for all agents
+                        current_time = time.time()
+                        for agent_name in agent_start_times:
+                            if agent_name not in agent_completion_times:
+                                agent_completion_times[agent_name] = current_time - agent_start_times[agent_name]
+                except Exception as e:
+                    logger.error(f"[Pipeline] Error processing event: {str(e)}")
+            
+            execution_time = time.time() - execution_start
+            logger.info(f"[Pipeline] Total execution time: {execution_time:.2f}s")
+            
+            # Log final agent completion times
+            if agent_completion_times:
+                logger.info("[Pipeline] Agent completion times:")
+                for agent, timing in agent_completion_times.items():
+                    logger.info(f"  - {agent}: {timing:.2f}s")
+            
+            if last_response:
+                total_time = time.time() - start_time
+                logger.info(f"[Pipeline] Total analysis time: {total_time:.2f}s")
+                return last_response
+            else:
+                logger.warning("[Pipeline] No final response from pipeline.")
+                return "No final response from pipeline."
+                
+        except Exception as e:
+            logger.error(f"[Pipeline] Error during execution: {str(e)}")
+            raise
+            
+    except Exception as e:
+        total_time = time.time() - start_time
+        logger.error(f"[Pipeline] Analysis failed after {total_time:.2f}s: {str(e)}")
+        return f"Analysis failed: {str(e)}" 
