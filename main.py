@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
-from .pipeline import run_ai_analysis
+from pipeline import run_ai_analysis
 
 app = FastAPI()
 
